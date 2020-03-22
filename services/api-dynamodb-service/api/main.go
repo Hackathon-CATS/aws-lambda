@@ -156,7 +156,7 @@ func add(req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, err
 
 	return events.APIGatewayProxyResponse{
 		StatusCode: 201,
-		Headers:    map[string]string{"Location": fmt.Sprintf("/?nodeId=%s", it.LieuID), "Access-Control-Allow-Origin": "'*'"},
+		Headers:    map[string]string{"Location": fmt.Sprintf("/?nodeId=%s", it.LieuID)},
 	}, nil
 }
 
