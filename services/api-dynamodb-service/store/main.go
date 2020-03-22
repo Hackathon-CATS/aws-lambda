@@ -21,15 +21,15 @@ var errorLogger = log.New(os.Stderr, "ERROR ", log.Llongfile)
 
 type item struct {
 	LieuID   string `json:"lieuId"`
-	EtatDesStocksPourcent   string `json:"etatDesStocksPourcent"`
-	Ouvert   bool `json:"ouvert"`
-	Latitude   string `json:"latitude"`
-	Longitude   string `json:"longitude"`
-	OsmNodeID   string `json:"osmNodeId"`
-	TempsDAttente   string `json:"tempsDAttente"`
-	PortDesGants   bool `json:"portDesGants"`
-	PortDuMasque   bool `json:"portDuMasque"`
-	RespectDesDistances   bool `json:"respectDesDistances"`
+	EtatDesStocksPourcent   string `json:"etatDesStocksPourcent,omitempty"`
+	Ouvert   bool `json:"ouvert,string"`
+	Latitude   string `json:"latitude,omitempty"`
+	Longitude   string `json:"longitude,omitempty"`
+	OsmNodeID   string `json:"osmNodeId,omitempty"`
+	TempsDAttente   string `json:"tempsDAttente,omitempty"`
+	PortDesGants   bool `json:"portDesGants,string"`
+	PortDuMasque   bool `json:"portDuMasque,string"`
+	RespectDesDistances   bool `json:"respectDesDistances,string"`
 }
 
 func getItem(nodeId string) (*item, error) {
@@ -58,17 +58,16 @@ func getItem(nodeId string) (*item, error) {
 	// to parse this straight into the fields of a struct. Note:
 	// UnmarshalListOfMaps also exists if you are working with multiple
 	// items.
-	bk := new(item)
-	err = dynamodbattribute.UnmarshalMap(result.Item, bk)
+	it := new(item)
+	err = dynamodbattribute.UnmarshalMap(result.Item, it)
 	if err != nil {
 		return nil, err
 	}
 
-	return bk, nil
+	return it, nil
 }
 
 func putItem(it *item) error {
-	fmt.Println("Begin putItem")
 	input := &dynamodb.PutItemInput{
 		TableName: aws.String("Lieu"),
 		Item: map[string]*dynamodb.AttributeValue{
@@ -112,6 +111,11 @@ func putItem(it *item) error {
 
 func router(req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	switch req.HTTPMethod {
+	case "OPTIONS":
+		return events.APIGatewayProxyResponse{
+			StatusCode: 200,
+			Headers:    map[string]string{"Access-Control-Allow-Origin": "*"},
+		}, nil
 	case "GET":
 		return get(req)
 	case "POST":
@@ -128,7 +132,7 @@ func get(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse,
 
 	r, err := getItem(nodeId)
 	if err != nil {
-		panic(fmt.Sprintf("Failed to find Item, %v", err))
+		serverError(err)
 	}
 
 	jsonItem, _ := json.Marshal(r)
@@ -155,8 +159,8 @@ func add(req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, err
 	}
 
 	return events.APIGatewayProxyResponse{
-		StatusCode: 201,
-		Headers:    map[string]string{"Location": fmt.Sprintf("/?nodeId=%s", it.LieuID)},
+		StatusCode: 200,
+		Headers:    map[string]string{"Access-Control-Allow-Origin": "*"},
 	}, nil
 }
 

@@ -11,7 +11,7 @@
 #
 # Happy Coding!
 
-service: api-dynamodb-service
+service: store-api
 # app and org for use with dashboard.serverless.com
 #app: your-app-name
 #org: your-org-name
@@ -30,11 +30,17 @@ provider:
   region: eu-west-3
 
 # you can add statements to the Lambda function's IAM Role here
-#  iamRoleStatements:
-#    - Effect: "Allow"
-#      Action:
-#        - "s3:ListBucket"
-#      Resource: { "Fn::Join" : ["", ["arn:aws:s3:::", { "Ref" : "ServerlessDeploymentBucket" } ] ]  }
+  iamRoleStatements:
+    - Effect: "Allow"
+      Action:
+        - dynamodb:DescribeTable
+        - dynamodb:Query
+        - dynamodb:Scan
+        - dynamodb:GetItem
+        - dynamodb:PutItem
+        - dynamodb:UpdateItem
+        - dynamodb:DeleteItem
+      Resource: "arn:aws:dynamodb:*:*:*"
 #    - Effect: "Allow"
 #      Action:
 #        - "s3:PutObject"
@@ -57,14 +63,14 @@ package:
 
 functions:
   api:
-    handler: bin/api
+    handler: bin/store
     events:
       - http:
-          path: api
+          path: store
           method: get
           cors: true
       - http:
-          path: api
+          path: store
           method: post
           cors: true
 
