@@ -42,8 +42,8 @@ type shopDB struct {
 	Ouvert   bool `json:"Ouvert"`
 	OSMNodeID   string `json:"OSMNodeId"`
 	TempsAttente   int64 `json:"TempsAttente"`
-	PortDesGants   int64 `json:"PortDeGants"`
-	PortDuMasque   int64 `json:"PortDeMasque"`
+	PortDesGants   int64 `json:"PortDesGants"`
+	PortDuMasque   int64 `json:"PortDuMasque"`
 	RespectDesDistances   int64 `json:"RespectDesDistances"`
 	NombreDeContribution int64 `json:"NombreDeContribution"`
 	HeureDerniereContribution string `json:"HeureDerniereContribution"`
