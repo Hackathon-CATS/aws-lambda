@@ -4,11 +4,10 @@ import (
 	"encoding/json"
 	"log"
 	"os"
-	"crypto/md5"
-	"encoding/hex"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
+	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -32,6 +31,7 @@ type shop struct {
 	PortDuMasque   bool `json:"portDuMasque"`
 	RespectDesDistances   bool `json:"respectDesDistances"`
 	NombreDeContribution int64 `json:"nombreDeContribution"`
+	SessionNombreDeContribution int64 `json:"sessionNombreDeContribution"`
 	HeureDerniereContribution string `json:"heureDerniereContribution"`
 	DateDeContribution string `json:"dateDeContribution"`
 }
@@ -46,8 +46,10 @@ type shopDB struct {
 	PortDuMasque   int64 `json:"PortDuMasque"`
 	RespectDesDistances   int64 `json:"RespectDesDistances"`
 	NombreDeContribution int64 `json:"NombreDeContribution"`
+	SessionNombreDeContribution int64 `json:"SessionNombreDeContribution"`
 	HeureDerniereContribution string `json:"HeureDerniereContribution"`
 	DateDeContribution string `json:"DateDeContribution"`
+	TimestampDerniereContribution int64 `json:"TimestampDerniereContribution"`
 }
 
 type shopDBInc struct {
@@ -60,12 +62,17 @@ type shopDBInc struct {
 	PortDuMasque   int64 `json:":pdm"`
 	RespectDesDistances   int64 `json:":rdd"`
 	NombreDeContribution int64 `json:":ndc"`
+	SessionNombreDeContribution int64 `json:":sndc"`
 	HeureDerniereContribution string `json:":hdc"`
 	DateDeContribution string `json:":ddc"`
+	TimestampDerniereContribution int64 `json:":tdc"`
+	MinTimestampDerniereContribution int64 `json:":mtdc"`
+	MaxSessionNombreDeContribution int64 `json:":msndc"`
 	Zero int64 `json:":zero"`
 }
 
 func shopDBToShopDBInc(s *shopDB) *shopDBInc {
+	loc, _ := time.LoadLocation("Europe/Paris")
 	return &shopDBInc{
 		ShopID: s.ShopID,
 		EtatDuStock: s.EtatDuStock,
@@ -78,27 +85,29 @@ func shopDBToShopDBInc(s *shopDB) *shopDBInc {
 		NombreDeContribution: 1,
 		HeureDerniereContribution: s.HeureDerniereContribution,
 		DateDeContribution: s.DateDeContribution,
+		TimestampDerniereContribution: s.TimestampDerniereContribution,
+		SessionNombreDeContribution: 1,
+		MinTimestampDerniereContribution: time.Now().Add(-1*time.Hour).In(loc).Unix(),
+		MaxSessionNombreDeContribution: 20,
 		Zero: 0,
 	}
 }
 
 func shopDBToShop(s *shopDB) *shop {
-	fmt.Println(s.ShopID)
-	fmt.Println(s.OSMNodeID)
-	fmt.Println(s.NombreDeContribution)
-	seuil := s.NombreDeContribution / 2
+	seuil := s.SessionNombreDeContribution / 2
 	return &shop{
 		ShopID: s.ShopID,
 		EtatDesStocks: s.EtatDuStock,
 		Ouvert: s.Ouvert,
 		OSMNodeID: s.OSMNodeID,
-		TempsAttente: int64(s.TempsAttente / s.NombreDeContribution),
+		TempsAttente: int64(s.TempsAttente / s.SessionNombreDeContribution),
 		PortDesGants: s.PortDesGants > seuil,
 		PortDuMasque: s.PortDuMasque > seuil,
 		RespectDesDistances: s.RespectDesDistances > seuil,
 		NombreDeContribution: s.NombreDeContribution,
 		HeureDerniereContribution: s.HeureDerniereContribution,
 		DateDeContribution: s.DateDeContribution,
+		SessionNombreDeContribution: s.SessionNombreDeContribution,
 	}
 }
 
@@ -122,6 +131,7 @@ func shopToShopDB(s *shop) *shopDB {
 		NombreDeContribution: 1,
 		HeureDerniereContribution: s.HeureDerniereContribution,
 		DateDeContribution: s.DateDeContribution,
+		SessionNombreDeContribution: 1,
 	}
 }
 
@@ -166,21 +176,56 @@ func putShop(s *shopDB) error {
 			},
 		},
 		TableName:                 aws.String("Shop"),
-		UpdateExpression:          aws.String("set TempsAttente = if_not_exists(TempsAttente, :zero) + :ta, " +
-			"PortDuMasque = if_not_exists(PortDuMasque, :zero) + :pdm, " +
-			"PortDesGants = if_not_exists(PortDesGants, :zero) + :pdg, " +
-			"RespectDesDistances = if_not_exists(RespectDesDistances, :zero) + :rdd, " +
+		UpdateExpression:          aws.String("set TempsAttente = :ta, " +
+			"PortDuMasque = :pdm, " +
+			"PortDesGants = :pdg, " +
+			"RespectDesDistances = :rdd, " +
 			"Ouvert = :o, " +
 			"EtatDuStock = :eds," +
 			"NombreDeContribution = if_not_exists(NombreDeContribution, :zero) + :ndc," +
+			"SessionNombreDeContribution = :sndc," +
 			"HeureDerniereContribution = :hdc," +
 			"OSMNodeId = :oni," +
 			"DateDeContribution = :ddc," +
+			"TimestampDerniereContribution = :tdc," +
 			"id = :si"),
 		ExpressionAttributeValues: data,
+		ConditionExpression: aws.String("TimestampDerniereContribution < :mtdc OR SessionNombreDeContribution >= :msndc"),
 	}
 
 	_, err = db.UpdateItem(input)
+	if err != nil {
+		if aerr, ok := err.(awserr.Error); ok {
+			if aerr.Code() == dynamodb.ErrCodeConditionalCheckFailedException {
+				err = nil
+				input := &dynamodb.UpdateItemInput{
+					Key: map[string]*dynamodb.AttributeValue{
+						"ShopId": {
+							S: aws.String(s.ShopID),
+						},
+					},
+					TableName:                 aws.String("Shop"),
+					UpdateExpression:          aws.String("set TempsAttente = if_not_exists(TempsAttente, :zero) + :ta, " +
+						"PortDuMasque = if_not_exists(PortDuMasque, :zero) + :pdm, " +
+						"PortDesGants = if_not_exists(PortDesGants, :zero) + :pdg, " +
+						"RespectDesDistances = if_not_exists(RespectDesDistances, :zero) + :rdd, " +
+						"Ouvert = :o, " +
+						"EtatDuStock = :eds," +
+						"NombreDeContribution = if_not_exists(NombreDeContribution, :zero) + :ndc," +
+						"SessionNombreDeContribution = if_not_exists(SessionNombreDeContribution, :zero) + :sndc," +
+						"HeureDerniereContribution = :hdc," +
+						"OSMNodeId = :oni," +
+						"DateDeContribution = :ddc," +
+						"TimestampDerniereContribution = :tdc," +
+						"id = :si"),
+					ExpressionAttributeValues: data,
+					ConditionExpression: aws.String(":mtdc  > :msndc"),
+				}
+				_, err = db.UpdateItem(input)
+			}
+
+		}
+	}
 
 	return err
 }
@@ -203,7 +248,6 @@ func router(req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, 
 }
 
 func get(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-
 	params := request.QueryStringParameters
 	if len(params) == 0 {
 		clientError(http.StatusBadRequest)
@@ -214,9 +258,7 @@ func get(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse,
 		clientError(http.StatusBadRequest)
 	}
 
-	id := fmt.Sprintf("%s#%s", time.Now().Format("02-01-2006"), nodeId)
-	fmt.Println("md5: "+ GetMD5Hash(id))
-	r, err := getShop(GetMD5Hash(id))
+	r, err := getShop(nodeId)
 	if err != nil {
 		serverError(err)
 	}
@@ -228,11 +270,11 @@ func get(request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse,
 	s := shopDBToShop(r)
 	jsonItem, _ := json.Marshal(s)
 	stringItem := string(jsonItem) + "\n"
-	fmt.Println("Found item: ", stringItem)
 	return events.APIGatewayProxyResponse{Body: stringItem, StatusCode: 200, Headers:    map[string]string{"Access-Control-Allow-Origin": "*"}}, nil
 }
 
 func add(req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+	loc, _ := time.LoadLocation("Europe/Paris")
 
 	if req.Headers["content-type"] != "application/json" && req.Headers["Content-Type"] != "application/json" {
 		return clientError(http.StatusNotAcceptable)
@@ -243,12 +285,14 @@ func add(req events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, err
 	if err != nil {
 		return clientError(http.StatusUnprocessableEntity)
 	}
-	id := fmt.Sprintf("%s#%s", time.Now().Format("02-01-2006"), s.OSMNodeID)
-	s.ShopID = GetMD5Hash(id)
-	s.DateDeContribution = time.Now().Format("02-01-2006")
-	s.HeureDerniereContribution = time.Now().Format("03:04:05")
+	s.ShopID = s.OSMNodeID
+	s.DateDeContribution = time.Now().In(loc).Format("02-01-2006")
+	s.HeureDerniereContribution = time.Now().In(loc).Format("15:04:05")
 
-	err = putShop(shopToShopDB(s))
+	sDB := shopToShopDB(s)
+	sDB.TimestampDerniereContribution = time.Now().In(loc).Unix()
+
+	err = putShop(sDB)
 
 	if err != nil {
 		return serverError(err)
@@ -278,10 +322,4 @@ func clientError(status int) (events.APIGatewayProxyResponse, error) {
 
 func main() {
 	lambda.Start(router)
-}
-
-func GetMD5Hash(text string) string {
-	hasher := md5.New()
-	hasher.Write([]byte(text))
-	return hex.EncodeToString(hasher.Sum(nil))
 }
